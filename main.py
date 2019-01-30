@@ -1,7 +1,6 @@
 # Main code for computing the adaptative shared headways for the toy problem (January 2019)
 
 import numpy as np
-#import random
 
 
 ################################################################################
@@ -10,7 +9,7 @@ import numpy as np
 
 L = 2 # number of different bus lines
 route_lengths = np.array([10,10]) # lengths of the routes before MP (km)
-stop_numbers = np.array([30,30])
+stop_numbers = np.array([10,10])
 v_max = 50 # (km/h)
 v_min = 40 # (km/h)
 b = 2.5 # passengers boarding rate (s/passenger)
@@ -22,6 +21,7 @@ input_headways = np.array([7,5]) # average headways between buses at the start o
 input_deviations = np.array([1,0.5]) # std of the input normal distribution for buses (minutes)
 time_limit = 120 # time at which the simulation stops (minutes)
 
+v_max = v_max*1000/3600
 
 ################################################################################
 #########################   INITIALIZATION   ###################################
@@ -29,10 +29,11 @@ time_limit = 120 # time at which the simulation stops (minutes)
 
 
 t = 0 # current time
-waiting_passengers = [] # number of passengers currently waiting at a given stop
+v_max = v_max*1000/3600 # convert speed in m/s
+v_min = v_min*1000/3600
+last_time_visited = [] # time at which the last bus left a given stop
 for l in range(L):
-    waiting_passengers.append(np.random.poisson(arrival_rates[l]*input_headways[l],stop_numbers[l])) # generate an average distribution before the first bus shows up
-#waiting_passengers = np.zeros([L,max(stop_numbers)]) # number of passengers currently waiting at a given stop
+    last_time_visited.append(np.zeros(stop_numbers[l]))
 #bus_positions = -np.ones([L,100]) # current positions of all the buses in the merging zone (less than 100)
 bus_positions = [[0],[0]] # current positions of all the buses in the merging zone (m)
 inter_stop_distances = 1000*route_lengths/stop_numbers # distance between two consecutive stops (m)
@@ -40,9 +41,12 @@ inter_stop_distances = 1000*route_lengths/stop_numbers # distance between two co
 next_bus_events = [[0],[0]] # delays in which corresponding bus will arrive to the next stop/leave the stop it is at
 is_at_stop = [[0],[0]] # indicate at which stop the corresponding bus is. 0 if the bus is not currently at a stop
 command_speeds = [[v_max],[v_max]] # speed at which each bus should be going according to the controller
+next_bus_inputs = np.random.normal(input_headways, input_deviations)*60 # delays in which new buses from each line will join the network
 
-#total_arrival_rate = np.tensordot(stop_numbers,arrival_rates,axes=1)
-
+next_bus_events = [[inter_stop_distances[l]/command_speeds[l][0]] for l in range(L)]
+print(inter_stop_distances)
+print(v_max)
+print(next_bus_events)
 
 ################################################################################
 ###########################   SIMULATION   #####################################
@@ -51,54 +55,87 @@ command_speeds = [[v_max],[v_max]] # speed at which each bus should be going acc
 
 while t < time_limit*60:
 
+
     next_bus_event = min([min(x) for x in next_bus_events])
+    next_bus_input = min(next_bus_inputs)
+    next_event = min(next_bus_event, next_bus_input)
+
+    t += next_event # update simulation time
+
+
+    if next_bus_event < next_bus_input:
 
     #if next_bus_event < dt - t%dt: # the next event is a bus arriving at/leaving a stop
 
-    for l in range(L):
-        if next_bus_event in next_bus_events[l]: # OBS ! Ignores simultaneous events
-            bus_line = l
-            bus_nb = np.argmin(next_bus_events[l])
-            break
+        for l in range(L):
+            if next_bus_event in next_bus_events[l]: # OBS ! Ignores simultaneous events
+                bus_line = l
+                bus_nb = np.argmin(next_bus_events[l])
+                break
 
-    if is_at_stop[bus_line][bus_nb] != 0:
+        current_stop = is_at_stop[bus_line][bus_nb]
 
-        print('The next event is bus number ' + str(bus_nb) + ' from bus line ' + str(bus_line) + ' leaving stop ' + str(is_at_stop[bus_line][bus_nb]))
+        if current_stop != 0:
 
-        is_at_stop[bus_line][bus_nb] = 0
+            print('The next event is bus number ' + str(bus_nb) + ' from bus line ' + str(bus_line+1) + ' leaving stop ' + str(current_stop))
 
-    else:
+            is_at_stop[bus_line][bus_nb] = 0
 
-        next_stop = bus_positions[bus_line][bus_nb]//inter_stop_distances[bus_line] + 1
+            next_bus_events[bus_line][bus_nb] += inter_stop_distances[bus_line]/command_speeds[bus_line][bus_nb]
 
-        if next_stop == stop_numbers[bus_line]: # OBS ! Watch out for mismatch int and double
-
-            print('A bus from line ' + str(bus_line) + ' arrives at the MP.')
-
+            last_time_visited[bus_line][current_stop-1] = t
 
         else:
 
-            is_at_stop[bus_line][bus_nb] = next_stop
+            next_stop = int(bus_positions[bus_line][bus_nb]//inter_stop_distances[bus_line] + 1)
 
-            print('The next event is bus number ' + str(bus_nb) + ' from bus line ' + str(bus_line) + ' arriving at stop ' + str(next_stop))
+            if next_stop == stop_numbers[bus_line]: # OBS ! Watch out for mismatch int and double
 
-            for l in range(L):
-                waiting_passengers[l] += np.random.poisson(arrival_rates[l]*next_bus_event,stop_numbers[l]) # Generate passengers arrivals during this delay
+                print('A bus from line ' + str(bus_line+1) + ' arrives at the MP.')
 
+                bus_positions[bus_line].pop(0) # remove the bus from the system
+                next_bus_events[bus_line].pop(0)
+                is_at_stop[bus_line].pop(0)
+                command_speeds[bus_line].pop(0)
 
-    for l in range(L):
-        next_bus_events[l] = [x - next_bus_event for x in next_bus_events[l]]
+            else:
 
-    # Check if everything in next_bus_events is > 0
+                is_at_stop[bus_line][bus_nb] = next_stop
 
+                print('The next event is bus number ' + str(bus_nb) + ' from bus line ' + str(bus_line+1) + ' arriving at stop ' + str(next_stop))
 
+                waiting_passengers = np.random.poisson(arrival_rates[l]*(t - last_time_visited[bus_line][next_stop - 1])) # generate the passengers that have arrived since last bus
+                waiting_passengers += np.random.poisson(b*waiting_passengers*arrival_rates[l]) # add any other additional passengers that might arrive meanwhile
+
+                next_bus_events[bus_line][bus_nb] += waiting_passengers*b
 
 
     else:
 
+        bus_line = np.argmin(next_bus_inputs)
+
+        print('The next event is a bus from line ' + str(bus_line+1) + ' joining the network.')
+
+        bus_positions[bus_line].append(0)
+        next_bus_events[bus_line].append(inter_stop_distances[bus_line]/v_max)
+        is_at_stop[bus_line].append(0)
+        command_speeds[bus_line].append(v_max)
+
+        next_bus_inputs[bus_line] += np.random.normal(input_headways[bus_line], input_deviations[bus_line])
 
 
+    print(next_event)
 
+    for l in range(L):
 
+        next_bus_events[l] = [x - next_event for x in next_bus_events[l]] # update delays # OBS ! Check if everything in next_bus_events is > 0
 
-    while H_previous == 0:
+        print(bus_positions[l])
+
+        bus_positions[l] = [x + next_event*v*(1 - min(y,1)) for x, v, y in zip(bus_positions[l], command_speeds[l], is_at_stop[l])] # update positions for relevant buses
+
+        print(bus_positions[l])
+
+    next_bus_inputs -= next_event # update delays
+
+    break
